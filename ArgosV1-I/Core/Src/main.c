@@ -26,18 +26,17 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
-#include <stdbool.h>
 #include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef struct _paramType
+typedef struct wheel_param
 {
-	uint32_t encoderPulseCount;
-	float wheelRadius;
-	float targetDistance;
-} __attribute__((aligned(1), packed)) WheelParam;
+	uint32_t one_rot_enc_pls; // 1 rotation encoder pulse value >> 2000
+	float car_w_rad; // Car Wheel Radius >> 0.275(m)
+	float tgt_dist; // Target Distance (Camera Action) >> 5.0(m)
+} __attribute__((aligned(1), packed)) wheel_param_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -59,14 +58,14 @@ typedef struct _paramType
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-int A_PLS_CNT = 0;
-int B_PLS_CNT = 0;
+int a_pls_cnt = 0;
+int b_pls_cnt = 0;
 
-bool bFlag = false;
-uint8_t xFlag = 0;
-uint8_t lineFlag = 0;
-extern char rxbuf[200];
-char txbuf[300];
+uint8_t run_f = 0;
+uint8_t cmd_f = 0;
+uint8_t enterkey_f = 0;
+extern char usb_rx_buf[200];
+char usb_tx_buf[300];
 
 /* USER CODE END PV */
 
@@ -84,22 +83,22 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	{
 	case GPIO_PIN_5:
 		HAL_GPIO_TogglePin(GPIOF, GPIO_PIN_0);
-		if (bFlag)
+		if (run_f)
 		{
-			A_PLS_CNT++;
+			a_pls_cnt++;
 		}
 		break;
 	case GPIO_PIN_6:
 		HAL_GPIO_TogglePin(GPIOF, GPIO_PIN_1);
-		if (bFlag)
+		if (run_f)
 		{
-			B_PLS_CNT++;
+			b_pls_cnt++;
 		}
 		break;
 	case GPIO_PIN_7:
 		HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_8);
 		//HAL_GPIO_WritePin(GPIOB,GPIO_PIN_0,SET);
-		//bFlag = true;
+		// = true;
 		break;
 	}
 	//HAL_GPIO_WritePin(GPIOB,GPIO_PIN_0,RESET);
@@ -110,18 +109,18 @@ float diameter(float radius)
 	return (2 * 3.1415 * radius);
 }
 
-float rotationForShoot(float targetDistance, float wheelDiameter)
+float n_of_rot_to_photo_dist(float tgt_dist, float w_diameter)
 {
-	return (targetDistance / wheelDiameter);
+	return (tgt_dist / w_diameter);
 }
 
-int targetPulseCount(float rotationCount, int encoderPulseCnt)
+int tgt_pls_cnt(float w_turn_enc_pls, int enc_pls_f)
 {
-	return (int) ((((rotationCount * encoderPulseCnt) / TARGET_PULSE_NUMBER)
+	return (int) ((((w_turn_enc_pls * enc_pls_f) / TARGET_PULSE_NUMBER)
 			/ DIVISOR));
 }
 
-void SaveWheelParam(WheelParam *wP)
+void save_w_param(wheel_param_t *wp)
 {
 	HAL_FLASH_Unlock();
 	{
@@ -132,8 +131,8 @@ void SaveWheelParam(WheelParam *wP)
 		fler.Page = 63;
 		fler.NbPages = 1;
 		HAL_FLASHEx_Erase(&fler, &perr);
-		register uint64_t *_targetAddr = (uint64_t*) (wP);
-		for (uint8_t i = 0; i <= (sizeof(WheelParam) * 2); i +=
+		register uint64_t *_targetAddr = (uint64_t*) (wp);
+		for (uint8_t i = 0; i <= (sizeof(wheel_param_t) * 2); i +=
 				sizeof(uint64_t))
 		{
 			HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD,
@@ -152,24 +151,22 @@ void SaveWheelParam(WheelParam *wP)
 int main(void)
 {
 	/* USER CODE BEGIN 1 */
-	char buf[150];
-	WheelParam wP;
-
+	wheel_param_t wp;
 	//At 1st, memcpy from backup addr
 
-	memcpy(&wP, (void*) (BACKUP_FLASH_ADDR), sizeof(WheelParam));
+	memcpy(&wp, (void*) (BACKUP_FLASH_ADDR), sizeof(wheel_param_t));
 
 	//2nd, compare memory
-	/*if (wP.encoderPulseCount == 0xFFFFFFFF)
+	/*if (wp.encoderPulseCount == 0xFFFFFFFF)
 	 {
 	 //if flash not initialized, set value to default
-	 wP.encoderPulseCount = 2000;
-	 wP.targetDistance = 5.0;
-	 wP.wheelRadius = 0.324;
-	 SaveWheelParam(&wP);
+	 wp.encoderPulseCount = 2000;
+	 wp.targetDistance = 5.0;
+	 wp.wheelRadius = 0.324;
+	 SaveWheelParam(&wp);
 	 }*/
 
-	int encoderTargetCount = -1;
+	int enc_val_for_photo_dist = -1;
 	/* USER CODE END 1 */
 
 	/* MCU Configuration--------------------------------------------------------*/
@@ -199,77 +196,77 @@ int main(void)
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
 	HAL_Delay(100);
-	encoderTargetCount = targetPulseCount(
-			rotationForShoot(wP.targetDistance, diameter(wP.wheelRadius)),
-			wP.encoderPulseCount);
-	xFlag = 0;
+	enc_val_for_photo_dist = tgt_pls_cnt(
+			n_of_rot_to_photo_dist(wp.tgt_dist, diameter(wp.car_w_rad)),
+			wp.one_rot_enc_pls);
+	cmd_f = 0;
 	while (1)
 	{
-		switch (xFlag)
+		switch (cmd_f)
 		{
 		case 1:	//set wheel param
-			CDC_Transmit_FS("Input wheel radius.. > ", 23);
-			while (!lineFlag)
+			CDC_Transmit_FS((uint8_t*) "Input wheel radius.. > ", 23);
+			while (!enterkey_f)
 				;
-			lineFlag = 0;
-			wP.wheelRadius = atof(rxbuf);
-			encoderTargetCount = targetPulseCount(
-					rotationForShoot(wP.targetDistance,
-							diameter(wP.wheelRadius)), wP.encoderPulseCount);
-			xFlag = 0;
+			enterkey_f = 0;
+			wp.car_w_rad = atof(usb_rx_buf);
+			enc_val_for_photo_dist = tgt_pls_cnt(
+					n_of_rot_to_photo_dist(wp.tgt_dist, diameter(wp.car_w_rad)),
+					wp.one_rot_enc_pls);
+			cmd_f = 0;
 			break;
 		case 2:	//set encoder pulse count;
-			CDC_Transmit_FS("Input encoder pulse cnt.. > ", 28);
-			while (!lineFlag)
+			CDC_Transmit_FS((uint8_t*) "Input encoder pulse cnt.. > ", 28);
+			while (!enterkey_f)
 				;
-			lineFlag = 0;
-			wP.encoderPulseCount = atoi(rxbuf);
-			if (wP.encoderPulseCount == 0)
+			enterkey_f = 0;
+			wp.one_rot_enc_pls = atoi(usb_rx_buf);
+			if (wp.one_rot_enc_pls == 0)
 			{
 				break;
 			}
-			encoderTargetCount = targetPulseCount(
-					rotationForShoot(wP.targetDistance,
-							diameter(wP.wheelRadius)), wP.encoderPulseCount);
-			xFlag = 0;
+			enc_val_for_photo_dist = tgt_pls_cnt(
+					n_of_rot_to_photo_dist(wp.tgt_dist, diameter(wp.car_w_rad)),
+					wp.one_rot_enc_pls);
+			cmd_f = 0;
 			break;
 		case 3:	//set trigger distance
-			CDC_Transmit_FS("Input trigger distance(m) > ", 28);
-			while (!lineFlag)
+			CDC_Transmit_FS((uint8_t*) "Input trigger distance(m) > ", 28);
+			while (!enterkey_f)
 				;
-			lineFlag = 0;
-			wP.targetDistance = atof(rxbuf);
-			encoderTargetCount = targetPulseCount(
-					rotationForShoot(wP.targetDistance,
-							diameter(wP.wheelRadius)), wP.encoderPulseCount);
-			xFlag = 0;
+			enterkey_f = 0;
+			wp.tgt_dist = atof(usb_rx_buf);
+			enc_val_for_photo_dist = tgt_pls_cnt(
+					n_of_rot_to_photo_dist(wp.tgt_dist, diameter(wp.car_w_rad)),
+					wp.one_rot_enc_pls);
+			cmd_f = 0;
 			break;
 		case 4:
-			sprintf(txbuf, "EncoderPulseCnt= %lu\r\n"
+			sprintf(usb_tx_buf, "EncoderPulseCnt= %lu\r\n"
 					"Wheel Radius= %0.5f\r\n"
 					"Trigger Distance= %0.2f\r\n"
 					"Target pulse count= %d\r\n"
-					"Auto triggering= %s\r\n", wP.encoderPulseCount,
-					wP.wheelRadius, wP.targetDistance, encoderTargetCount,
-					(bFlag == true) ? ("Started") : ("Disabled"));
-			CDC_Transmit_FS(txbuf, strlen(txbuf));
-			xFlag = 0;
+					"Auto triggering= %s\r\n", wp.one_rot_enc_pls, wp.car_w_rad,
+					wp.tgt_dist, enc_val_for_photo_dist,
+					(run_f == 1) ? ("Started") : ("Disabled"));
+			CDC_Transmit_FS((uint8_t*) usb_tx_buf, strlen(usb_tx_buf));
+			cmd_f = 0;
 			break;
 		case 5:
-			CDC_Transmit_FS("Saving current param...\r\n", 25);
-			SaveWheelParam(&wP);
-			xFlag = 0;
+			CDC_Transmit_FS((uint8_t*) "Saving current param...\r\n", 25);
+			save_w_param(&wp);
+			cmd_f = 0;
 			break;
 		default:
-			xFlag = 0;
+			cmd_f = 0;
 		}
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
-		if (bFlag && A_PLS_CNT >= encoderTargetCount)
+		if (run_f && a_pls_cnt >= enc_val_for_photo_dist)
 		{
-			A_PLS_CNT = 0;
-			B_PLS_CNT = 0;
+			a_pls_cnt = 0;
+			b_pls_cnt = 0;
 			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, SET);
 			LL_TIM_ClearFlag_UPDATE(TIM3);
 			LL_TIM_EnableCounter(TIM3);
